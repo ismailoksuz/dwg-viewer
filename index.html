@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#121212">
+    <title>DWG Görüntüleyici</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #121212; color: #fff; font-family: sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        header { padding: 12px 16px; background: #1e1e1e; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; z-index: 10; }
+        h1 { font-size: 16px; }
+        .btn { background: #007bff; color: white; padding: 8px 14px; border-radius: 6px; font-size: 14px; cursor: pointer; border: none; }
+        #fileInput { display: none; }
+        #viewer { flex: 1; position: relative; width: 100%; height: 100%; touch-action: none; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        svg { width: 100%; height: 100%; transform-origin: center; }
+        #status { position: absolute; color: #888; font-size: 14px; text-align: center; padding: 20px; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>DWG Önizleyici</h1>
+        <label for="fileInput" class="btn">DWG Seç</label>
+        <input type="file" id="fileInput" accept=".dwg">
+    </header>
+    <div id="viewer">
+        <div id="status">Başlamak için sağ üstten bir .dwg dosyası seç</div>
+    </div>
+
+    <script type="module">
+        // PWA Service Worker Kaydı
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js');
+        }
+
+        import { Dwg_File_Type, LibreDwg } from 'https://cdn.jsdelivr.net/npm/@mlightcad/libredwg-web@0.3.2/dist/libredwg-web.js';
+
+        const fileInput = document.getElementById('fileInput');
+        const viewer = document.getElementById('viewer');
+        const status = document.getElementById('status');
+        let libredwg = null;
+
+        // Zoom & Pan Değişkenleri
+        let scale = 1, panX = 0, panY = 0, startX = 0, startY = 0, isDragging = false, initialDist = 0;
+
+        async function initWasm() {
+            if (!libredwg) {
+                status.innerText = 'Motor yükleniyor...';
+                libredwg = await LibreDwg.create();
+                status.innerText = 'DWG dosyası seçmeye hazır';
+            }
+        }
+        initWasm();
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            status.style.display = 'block';
+            status.innerText = 'Dosya işleniyor...';
+            
+            // Eski çizimi temizle
+            const oldSvg = viewer.querySelector('svg');
+            if (oldSvg) oldSvg.remove();
+
+            try {
+                await initWasm();
+                const buffer = await file.arrayBuffer();
+                const dwg = libredwg.dwg_read_data(buffer, Dwg_File_Type.DWG);
+                const db = libredwg.convert(dwg);
+                const svgString = libredwg.dwg_to_svg(db);
+                libredwg.dwg_free(dwg);
+
+                status.style.display = 'none';
+                viewer.insertAdjacentHTML('beforeend', svgString);
+                
+                const svg = viewer.querySelector('svg');
+                svg.style.background = '#121212';
+                resetTransform(svg);
+            } catch (err) {
+                status.innerText = 'Hata: Dosya okunamadı veya desteklenmeyen DWG sürümü.';
+                console.error(err);
+            }
+        });
+
+        function resetTransform(svg) {
+            scale = 1; panX = 0; panY = 0;
+            updateTransform(svg);
+        }
+
+        function updateTransform(svg) {
+            if (svg) svg.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        }
+
+        // Mobil Dokunmatik Kaydırma ve Yakınlaştırma (Pinch-to-Zoom)
+        viewer.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                isDragging = true;
+                startX = e.touches[0].clientX - panX;
+                startY = e.touches[0].clientY - panY;
+            } else if (e.touches.length === 2) {
+                isDragging = false;
+                initialDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+            }
+        });
+
+        viewer.addEventListener('touchmove', (e) => {
+            const svg = viewer.querySelector('svg');
+            if (!svg) return;
+            if (e.touches.length === 1 && isDragging) {
+                panX = e.touches[0].clientX - startX;
+                panY = e.touches[0].clientY - startY;
+                updateTransform(svg);
+            } else if (e.touches.length === 2) {
+                const dist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                scale *= (dist / initialDist);
+                scale = Math.min(Math.max(0.1, scale), 20);
+                initialDist = dist;
+                updateTransform(svg);
+            }
+        });
+
+        viewer.addEventListener('touchend', () => { isDragging = false; });
+    </script>
+</body>
+</html>
